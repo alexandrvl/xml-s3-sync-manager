@@ -3,6 +3,7 @@ import { User, UserRole } from '../types';
 import { readStorage, writeStorage, removeStorage } from '../utils/storage';
 import { getApi, isRemoteApiEnabled, setApiActorRole } from '../api';
 import { setAccessToken } from '../api/config';
+import { canEditXml } from '../auth/roles';
 import {
   acquireEntraToken,
   initEntra,
@@ -64,18 +65,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const entraOn = Boolean(config?.enabled && config.clientId);
       const envToken = (import.meta.env.VITE_TEST_TOKEN || '').trim();
       const testOn = Boolean(config?.testAuthEnabled || config?.profile === 'test' || envToken);
-      const resolvedToken = (config?.testToken || envToken).trim();
       const resolvedEmail = (config?.testEmail || 'test@local').trim();
       const resolvedName = (config?.testName || 'Test User').trim();
       if (!cancelled) {
         setIsTestProfile(testOn);
         setTestEmail(resolvedEmail);
         setTestName(resolvedName);
-        setTestToken(resolvedToken);
+        setTestToken(envToken);
         setIsEntra(!testOn && (entraOn || (import.meta.env.VITE_ENTRA_ENABLED || '').toLowerCase() === 'true'));
       }
-      if (testOn && resolvedToken) {
-        setAccessToken(resolvedToken);
+      if (testOn && envToken) {
+        setAccessToken(envToken);
         try {
           const me = await getApi().me();
           if (!cancelled) {
@@ -130,22 +130,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const loginTest = async () => {
     const token = testToken.trim() || (import.meta.env.VITE_TEST_TOKEN || '').trim();
-    if (!token) {
-      throw new Error('TEST profile token is not available.');
-    }
-    await applyTestSession(token);
-  };
-
-  const login = async (email: string, password: string, role: UserRole = 'Administrator') => {
-    const trimmed = email.trim().toLowerCase();
-    if (isTestProfile && trimmed === testEmail.trim().toLowerCase()) {
-      const token = testToken.trim() || (import.meta.env.VITE_TEST_TOKEN || '').trim();
-      if (!token || password !== token) {
-        throw new Error('Use the TEST profile token as the password for the test user.');
-      }
+    if (token) {
       await applyTestSession(token);
       return;
     }
+    throw new Error('Enter the test user email and password, then Sign In.');
+  };
+
+  const login = async (email: string, password: string, role: UserRole = 'Viewer') => {
     const session = await getApi().login({ email: email.trim(), password }, role);
     setApiActorRole(session.user.role);
     setUser({
@@ -174,7 +166,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const canEdit = !user || user.role === 'Administrator' || user.role === 'Content Editor';
+  const canEdit = canEditXml(user?.role);
   const canSyncS3 = user?.role === 'Administrator';
   const canManageBrand = user?.role === 'Administrator';
 

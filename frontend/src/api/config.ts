@@ -1,4 +1,4 @@
-import { readStorage, removeStorage, writeStorage } from '../utils/storage';
+import { readSession, removeSession, writeSession } from '../utils/storage';
 
 const TOKEN_KEY = 'api_token';
 
@@ -12,13 +12,13 @@ export function isRemoteApiEnabled(): boolean {
 }
 
 export function getAccessToken(): string | null {
-  return readStorage<string | null>(TOKEN_KEY, null);
+  return readSession<string | null>(TOKEN_KEY, null);
 }
 
 export function setAccessToken(token: string | null): void {
   if (token) {
-    writeStorage(TOKEN_KEY, token);
+    writeSession(TOKEN_KEY, token);
   } else {
-    removeStorage(TOKEN_KEY);
+    removeSession(TOKEN_KEY);
   }
 }

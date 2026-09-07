@@ -17,7 +17,6 @@ export interface EntraPublicConfig {
   apiAudience?: string;
   profile?: string;
   testAuthEnabled?: boolean;
-  testToken?: string | null;
   testEmail?: string | null;
   testName?: string | null;
 }

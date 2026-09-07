@@ -1,5 +1,5 @@
-import { acquireEntraToken, isEntraConfigured } from '../auth/entra';
 import { ApiError } from './errors';
+import { acquireEntraToken, isEntraConfigured } from '../auth/entra';
 import { getAccessToken, getApiBaseUrl } from './config';
 
 interface RequestOptions {
@@ -20,6 +20,15 @@ function buildUrl(path: string, query?: Record<string, string | number | undefin
     }
   }
   return url.toString();
+}
+
+function parseBody(text: string): unknown {
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -54,7 +63,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   }
 
   const text = await response.text();
-  const data = text ? (JSON.parse(text) as unknown) : undefined;
+  const data = parseBody(text);
 
   if (!response.ok) {
     const err = data as { code?: string; message?: string } | undefined;
@@ -63,6 +72,10 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
       err?.code || 'request_failed',
       err?.message || `Request failed with status ${response.status}`
     );
+  }
+
+  if (data === undefined && text) {
+    throw new ApiError(response.status, 'request_failed', 'Response was not valid JSON.');
   }
 
   return data as T;

@@ -1,0 +1,15 @@
+# TEST / demo overlay. Entra is off; password login uses AUTH_TEST_TOKEN.
+# Does not bake VITE_TEST_TOKEN into the UI image.
+#
+#   cp .env.test.example .env.test
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml --env-file .env.test up --build
+#
+# Sign in at http://localhost:8080 with test@local / test-token (or AUTH_TEST_TOKEN).
+
+services:
+  backend:
+    environment:
+      APP_PROFILE: test
+      AUTH_TEST_TOKEN: ${AUTH_TEST_TOKEN:-test-token}
+      ENTRA_AUTH_ENABLED: "false"
+      APP_CONFIG_FILE: /app/config.test.yaml

@@ -27,6 +27,7 @@ export const XmlUploader: React.FC = () => {
   const { document, loadXmlFile, downloadXmlFile, renameActiveDocument, s3Config, isActiveDocumentInbound } =
     useXmlManager();
   const canEdit = roleCanEdit && isActiveDocumentInbound;
+  const canUpload = roleCanEdit;
 
   const [isDragOver, setIsDragOver] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -63,6 +64,10 @@ export const XmlUploader: React.FC = () => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragOver(false);
+    if (!canUpload) {
+      setErrorMessage('Sign in as an editor to upload XML.');
+      return;
+    }
     setErrorMessage(null);
 
     const files = e.dataTransfer.files;
@@ -87,6 +92,11 @@ export const XmlUploader: React.FC = () => {
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!canUpload) {
+      setErrorMessage('Sign in as an editor to upload XML.');
+      e.target.value = '';
+      return;
+    }
     const files = e.target.files;
     if (files && files.length > 0) {
       setErrorMessage(null);
@@ -164,7 +174,10 @@ export const XmlUploader: React.FC = () => {
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => {
+              if (!canUpload) return;
+              fileInputRef.current?.click();
+            }}
             sx={{
               p: 2.5,
               height: '100%',
@@ -179,7 +192,8 @@ export const XmlUploader: React.FC = () => {
                 : '#f8fafc',
               borderRadius: '12px',
               textAlign: 'center',
-              cursor: 'pointer',
+              cursor: canUpload ? 'pointer' : 'not-allowed',
+              opacity: canUpload ? 1 : 0.55,
               transition: 'all 0.2s ease-in-out',
               display: 'flex',
               flexDirection: 'column',
@@ -187,10 +201,7 @@ export const XmlUploader: React.FC = () => {
               justifyContent: 'center',
               gap: 1,
               '&:hover': {
-                borderColor: theme.palette.primary.main,
-                '& .upload-icon-circle': {
-                  color: theme.palette.primary.main,
-                },
+                borderColor: canUpload ? theme.palette.primary.main : undefined,
               },
             }}
           >
@@ -203,14 +214,17 @@ export const XmlUploader: React.FC = () => {
             />
 
             <Box
-              className="upload-icon-circle"
               sx={{
                 width: 44,
                 height: 44,
                 borderRadius: '50%',
                 backgroundColor: theme.palette.background.paper,
                 boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.08)',
-                color: theme.palette.mode === 'dark' ? '#94a3b8' : '#64748b',
+                color: isDragOver && canUpload
+                  ? theme.palette.primary.main
+                  : theme.palette.mode === 'dark'
+                    ? '#94a3b8'
+                    : '#64748b',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',

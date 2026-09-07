@@ -28,5 +28,4 @@ auth_test_email: test@local
 auth_test_name: Test User
 auth_test_role: Administrator
 
-data_dir: ./tmp-test-data
 auth_dev_secret: test-profile-dev-secret

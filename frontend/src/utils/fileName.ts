@@ -84,8 +84,9 @@ export function inboundObjectKey(fileName: string, now = new Date()): string {
 
 export function isInboundObjectKey(objectKey: string): boolean {
   const key = objectKey.trim();
-  if (!key || key.startsWith('/') || key.includes('..')) return false;
-  const parts = key.split('/').filter(Boolean);
+  if (!key || key.startsWith('/')) return false;
+  const parts = key.split('/');
+  if (parts.some((part) => part === '' || part === '.' || part === '..')) return false;
   return parts.length >= 2 && parts[0] === INBOUND_ROOT;
 }
 

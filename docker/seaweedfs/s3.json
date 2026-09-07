@@ -1,10 +1,6 @@
 {
   "identities": [
     {
-      "name": "anonymous",
-      "actions": ["Read"]
-    },
-    {
       "name": "xml-s3-sync",
       "credentials": [
         {

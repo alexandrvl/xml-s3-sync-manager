@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hmac
+import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any
@@ -13,8 +16,10 @@ from jwt.exceptions import InvalidTokenError
 
 from app.config import Settings, get_settings
 from app.models import User, UserRole, http_error
+from app import token_denylist
 
 bearer_scheme = HTTPBearer(auto_error=False)
+logger = logging.getLogger("uvicorn.error")
 
 
 def _csv_set(value: str) -> set[str]:
@@ -74,33 +79,19 @@ def _jwks_client(url: str) -> PyJWKClient:
 
 def decode_entra_token(token: str, settings: Settings) -> dict[str, Any]:
     audience = settings.api_audience()
-    if not settings.entra_tenant_id and not settings.entra_issuer:
-        raise http_error(401, "unauthorized", "Entra ID is enabled but tenant/issuer is not configured.")
-    signing_key = _jwks_client(settings.jwks_url()).get_signing_key_from_jwt(token)
-    issuers = [settings.issuer_url()]
-    tenant = settings.entra_tenant_id.strip()
-    if tenant:
-        issuers.append(f"https://sts.windows.net/{tenant}/")
-        issuers.append(f"https://login.microsoftonline.com/{tenant}/v2.0")
-    last_error: Exception | None = None
-    audiences = [audience]
-    if settings.entra_client_id and settings.entra_client_id not in audiences:
-        audiences.append(settings.entra_client_id)
-        audiences.append(f"api://{settings.entra_client_id}")
-    for iss in issuers:
-        for aud in audiences:
-            try:
-                return jwt.decode(
-                    token,
-                    signing_key.key,
-                    algorithms=["RS256"],
-                    audience=aud,
-                    issuer=iss,
-                )
-            except InvalidTokenError as exc:
-                last_error = exc
-                continue
-    raise http_error(401, "unauthorized", f"Invalid Entra ID token: {last_error}")
+    if not audience:
+        raise http_error(401, "unauthorized", "Entra ID audience is not configured.")
+    try:
+        signing_key = _jwks_client(settings.jwks_url()).get_signing_key_from_jwt(token)
+        return jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=audience,
+            issuer=settings.issuer_url(),
+        )
+    except (InvalidTokenError, ValueError) as exc:
+        raise http_error(401, "unauthorized", "Invalid Entra ID token.") from exc
 
 
 def create_dev_token(user: User, settings: Settings) -> str:
@@ -114,6 +105,7 @@ def create_dev_token(user: User, settings: Settings) -> str:
         "roles": [user.role],
         "iss": "xml-s3-sync-dev",
         "aud": "xml-s3-sync-dev",
+        "jti": str(uuid.uuid4()),
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=settings.auth_dev_token_minutes)).timestamp()),
     }
@@ -133,7 +125,7 @@ def decode_dev_token(token: str, settings: Settings) -> dict[str, Any]:
         raise http_error(401, "unauthorized", "Invalid or expired session token.") from exc
 
 
-def exchange_authorization_code(code: str, redirect_uri: str, code_verifier: str | None, settings: Settings) -> dict[str, Any]:
+def exchange_authorization_code(code: str, settings: Settings) -> dict[str, Any]:
     if not settings.entra_client_id or not settings.entra_client_secret:
         raise http_error(400, "validation_error", "Confidential client secret is not configured.")
     app = msal.ConfidentialClientApplication(
@@ -142,18 +134,20 @@ def exchange_authorization_code(code: str, redirect_uri: str, code_verifier: str
         authority=settings.authority_url(),
     )
     scopes = settings.entra_scope_list() or ["openid", "profile", "email"]
-    kwargs: dict = {
-        "code": code,
-        "scopes": scopes,
-        "redirect_uri": redirect_uri or settings.entra_redirect_uri,
-    }
-    if code_verifier:
-        kwargs["data"] = {"code_verifier": code_verifier}
-    result = app.acquire_token_by_authorization_code(**kwargs)
+    result = app.acquire_token_by_authorization_code(
+        code=code,
+        scopes=scopes,
+        redirect_uri=settings.entra_redirect_uri,
+    )
     if "access_token" not in result:
-        description = result.get("error_description") or result.get("error") or "token exchange failed"
-        raise http_error(401, "unauthorized", str(description))
+        raise http_error(401, "unauthorized", "Entra ID token exchange failed.")
     return result
+
+
+def _reject_if_revoked(token: str, claims: dict[str, Any]) -> None:
+    token_id = token_denylist.token_id_from_claims(claims, token)
+    if token_denylist.is_revoked(token_id):
+        raise http_error(401, "unauthorized", "Session has been signed out.")
 
 
 def get_current_user(
@@ -167,13 +161,21 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     token = credentials.credentials
-    if settings.is_test_profile() and settings.auth_test_token and token == settings.auth_test_token:
-        return test_user(settings)
+    if settings.is_test_profile() and settings.auth_test_token:
+        expected = settings.auth_test_token.encode("utf-8")
+        provided = token.encode("utf-8")
+        if len(expected) == len(provided) and hmac.compare_digest(expected, provided):
+            _reject_if_revoked(token, {"jti": f"test:{token_denylist.token_fingerprint(token)}"})
+            return test_user(settings)
     if settings.entra_auth_enabled and not settings.is_test_profile():
         claims = decode_entra_token(token, settings)
+        _reject_if_revoked(token, claims)
         return user_from_claims(claims, settings, "entra")
-    claims = decode_dev_token(token, settings)
-    return user_from_claims(claims, settings, "remote")
+    if settings.is_dev_profile() or settings.is_test_profile():
+        claims = decode_dev_token(token, settings)
+        _reject_if_revoked(token, claims)
+        return user_from_claims(claims, settings, "remote")
+    raise http_error(401, "unauthorized", "Password login is disabled.")
 
 
 def require_admin(user: User = Depends(get_current_user)) -> User:
@@ -186,3 +188,34 @@ def require_editor(user: User = Depends(get_current_user)) -> User:
     if user.role not in ("Administrator", "Content Editor"):
         raise http_error(403, "forbidden", "Editing requires Administrator or Content Editor.")
     return user
+
+
+def revoke_current_token(
+    credentials: HTTPAuthorizationCredentials | None,
+    settings: Settings,
+) -> None:
+    if credentials is None or not credentials.credentials:
+        return
+    token = credentials.credentials
+    claims: dict[str, Any] = {}
+    exp: int | None = None
+    try:
+        if settings.is_test_profile() and settings.auth_test_token:
+            expected = settings.auth_test_token.encode("utf-8")
+            provided = token.encode("utf-8")
+            if len(expected) == len(provided) and hmac.compare_digest(expected, provided):
+                claims = {"jti": f"test:{token_denylist.token_fingerprint(token)}"}
+                exp = int((datetime.now(timezone.utc) + timedelta(minutes=settings.auth_dev_token_minutes)).timestamp())
+        elif settings.entra_auth_enabled and not settings.is_test_profile():
+            claims = decode_entra_token(token, settings)
+            raw_exp = claims.get("exp")
+            exp = int(raw_exp) if raw_exp else None
+        else:
+            claims = decode_dev_token(token, settings)
+            raw_exp = claims.get("exp")
+            exp = int(raw_exp) if raw_exp else None
+    except HTTPException:
+        return
+    token_id = token_denylist.token_id_from_claims(claims, token)
+    token_denylist.revoke(token_id, exp)
+    logger.info("Access token revoked until expiry on this process.")

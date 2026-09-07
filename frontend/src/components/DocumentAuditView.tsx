@@ -72,9 +72,11 @@ export const DocumentAuditView: React.FC<DocumentAuditViewProps> = ({ onSwitchTo
     document: activeDoc,
     loadAuditDocAsActive,
     createXmlFromAuditDoc,
+    ensureStoredXml,
     suggestNameFromAuditDoc,
     refreshS3Listing,
     isListingS3,
+    listingError,
   } = useXmlManager();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -115,7 +117,9 @@ export const DocumentAuditView: React.FC<DocumentAuditViewProps> = ({ onSwitchTo
     return [...s3StoredDocs]
       .sort((a, b) => Date.parse(b.lastModified) - Date.parse(a.lastModified))
       .map((doc) => {
-        const parsed = parseXmlStringToModel(doc.content, doc.fileName);
+        const parsed = doc.content
+          ? parseXmlStringToModel(doc.content, doc.fileName)
+          : { document: undefined as undefined, error: undefined };
         const values = parsed.document ? extractDocumentValues(parsed.document.root) : [];
         const lastModifiedMs = Date.parse(doc.lastModified);
         return {
@@ -140,6 +144,22 @@ export const DocumentAuditView: React.FC<DocumentAuditViewProps> = ({ onSwitchTo
         };
       });
   }, [s3StoredDocs]);
+
+  useEffect(() => {
+    if (!selectedDocForInspect) return;
+    const next = currentS3Docs.find((doc) => doc.id === selectedDocForInspect.id);
+    if (next && next.rawXml !== selectedDocForInspect.rawXml) {
+      setSelectedDocForInspect(next);
+    }
+  }, [currentS3Docs, selectedDocForInspect]);
+
+  useEffect(() => {
+    if (!selectedDocForRawXml) return;
+    const next = currentS3Docs.find((doc) => doc.id === selectedDocForRawXml.id);
+    if (next && next.rawXml !== selectedDocForRawXml.rawXml) {
+      setSelectedDocForRawXml(next);
+    }
+  }, [currentS3Docs, selectedDocForRawXml]);
 
   const folderOptions = useMemo(() => {
     return sortParentFolders(folderFilter ? [...s3ParentFolders, folderFilter] : s3ParentFolders);
@@ -178,9 +198,9 @@ export const DocumentAuditView: React.FC<DocumentAuditViewProps> = ({ onSwitchTo
     setCreateNameError(null);
   };
 
-  const handleConfirmCreateNewXml = (overwrite = false) => {
+  const handleConfirmCreateNewXml = async (overwrite = false) => {
     if (!createFromDoc) return;
-    const result = createXmlFromAuditDoc(createFromDoc.id, newXmlFileName, createObjectKey, overwrite);
+    const result = await createXmlFromAuditDoc(createFromDoc.id, newXmlFileName, createObjectKey, overwrite);
     if (result.needsOverwrite) {
       setOverwriteAction('create');
       setOverwriteMessage(result.error || 'A file with this name already exists.');
@@ -215,9 +235,9 @@ export const DocumentAuditView: React.FC<DocumentAuditViewProps> = ({ onSwitchTo
     setReactivateError(null);
   };
 
-  const handleConfirmReactivate = (overwrite = false) => {
+  const handleConfirmReactivate = async (overwrite = false) => {
     if (!reactivateDoc) return;
-    const result = loadAuditDocAsActive(reactivateDoc.id, reactivateObjectKey, overwrite);
+    const result = await loadAuditDocAsActive(reactivateDoc.id, reactivateObjectKey, overwrite);
     if (result.needsOverwrite) {
       setOverwriteAction('reactivate');
       setOverwriteMessage(result.error || 'A file with this name already exists.');
@@ -241,8 +261,25 @@ export const DocumentAuditView: React.FC<DocumentAuditViewProps> = ({ onSwitchTo
     }
   };
 
+  const hydrateAuditDoc = async (doc: AuditDocument) => {
+    if (doc.rawXml) return;
+    const result = await ensureStoredXml(doc.id);
+    if (!result.success) {
+      setActionAlert({
+        message: result.error || `Could not load XML for "${doc.fileName}".`,
+        severity: 'warning',
+      });
+    }
+  };
+
   const handleOpenInspect = (doc: AuditDocument) => {
     setSelectedDocForInspect(doc);
+    void hydrateAuditDoc(doc);
+  };
+
+  const handleOpenRawXml = (doc: AuditDocument) => {
+    setSelectedDocForRawXml(doc);
+    void hydrateAuditDoc(doc);
   };
 
   return (
@@ -378,6 +415,11 @@ export const DocumentAuditView: React.FC<DocumentAuditViewProps> = ({ onSwitchTo
           Showing {filteredDocs.length} of {currentS3Docs.length} latest objects
         </Typography>
       </Box>
+      {listingError && (
+        <Alert severity="error" sx={{ mb: 1 }}>
+          {listingError}
+        </Alert>
+      )}
 
       {/* 10 Documents Cards with Values */}
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -672,7 +714,7 @@ export const DocumentAuditView: React.FC<DocumentAuditViewProps> = ({ onSwitchTo
                     size="small"
                     variant="text"
                     startIcon={<CodeIcon />}
-                    onClick={() => setSelectedDocForRawXml(doc)}
+                    onClick={() => handleOpenRawXml(doc)}
                     sx={{ fontSize: '0.78rem', textTransform: 'none' }}
                   >
                     Raw XML

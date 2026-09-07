@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
+
+XML_CONTENT_MAX = 5 * 1024 * 1024
+FILE_NAME_MAX = 255
 
 
 def to_camel(name: str) -> str:
@@ -63,7 +66,6 @@ class EntraPublicConfig(ApiModel):
     api_audience: str
     profile: str = "default"
     test_auth_enabled: bool = False
-    test_token: str | None = None
     test_email: str | None = None
     test_name: str | None = None
 
@@ -74,79 +76,11 @@ class EntraCodeExchangeRequest(ApiModel):
     code_verifier: str | None = None
 
 
-class CreateDocumentRequest(ApiModel):
-    file_name: str = Field(min_length=1)
-    xml_content: str = Field(min_length=1)
-
-
-class UpdateDocumentRequest(ApiModel):
-    xml_content: str = Field(min_length=1)
-    version: int | None = None
-
-
-class Document(ApiModel):
-    id: str
-    file_name: str
-    file_size: int
-    last_modified: str
-    version: int
-    xml_content: str
-    status: Literal["local", "imported", "synced"]
-    object_key: str | None = None
-    etag: str | None = None
-    root_tag: str | None = None
-
-
-class DocumentSummary(ApiModel):
-    id: str
-    file_name: str
-    file_size: int
-    last_modified: str
-    version: int
-    status: Literal["local", "imported", "synced"]
-    object_key: str | None = None
-    root_tag: str | None = None
-
-
-class DocumentList(ApiModel):
-    items: list[DocumentSummary]
-
-
-class CreateChangeRequest(ApiModel):
-    change_type: str
-    node_path: str
-    node_tag: str
-    field_name: str | None = None
-    old_value: str | None = None
-    new_value: str | None = None
-    description: str
-
-
-class ChangeEntry(ApiModel):
-    id: str
-    timestamp: str
-    user: str
-    user_email: str
-    node_path: str
-    node_tag: str
-    change_type: str
-    field_name: str | None = None
-    old_value: str | None = None
-    new_value: str | None = None
-    status: str
-    sync_id: str | None = None
-    description: str
-
-
-class ChangeList(ApiModel):
-    items: list[ChangeEntry]
-
-
 class PutObjectRequest(ApiModel):
-    object_key: str = Field(min_length=1)
-    file_name: str
-    xml_content: str
-    document_id: str | None = None
+    object_key: str = Field(min_length=1, max_length=1024)
+    file_name: str = Field(min_length=1, max_length=FILE_NAME_MAX)
+    xml_content: str = Field(min_length=1, max_length=XML_CONTENT_MAX)
+    if_match: str | None = None
 
 
 class StoredObject(ApiModel):
@@ -182,10 +116,6 @@ class SyncResult(ApiModel):
     version_id: str | None = None
     size_bytes: int
     storage_uri: str | None = None
-
-
-class SyncResultList(ApiModel):
-    items: list[SyncResult]
 
 
 def http_error(status: int, code: str, message: str) -> HTTPException:

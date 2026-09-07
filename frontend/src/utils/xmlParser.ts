@@ -95,27 +95,46 @@ export function xmlModelToString(rootNode: XmlNode): string {
     const indent = '  '.repeat(indentLevel);
     let attrs = '';
     if (node.attributes && node.attributes.length > 0) {
-      attrs = ' ' + node.attributes.map((a) => `${a.name}="${escapeXml(a.value)}"`).join(' ');
+      attrs = ' ' + node.attributes.map((a) => `${escapeXmlName(a.name)}="${escapeXml(a.value)}"`).join(' ');
     }
 
     if (node.children.length === 0) {
       if (node.textValue !== undefined && node.textValue !== '') {
-        return `${indent}<${node.tagName}${attrs}>${escapeXml(node.textValue)}</${node.tagName}>\n`;
+        return `${indent}<${escapeXmlName(node.tagName)}${attrs}>${escapeXml(node.textValue)}</${escapeXmlName(node.tagName)}>\n`;
       } else {
-        return `${indent}<${node.tagName}${attrs} />\n`;
+        return `${indent}<${escapeXmlName(node.tagName)}${attrs} />\n`;
       }
     }
 
-    let result = `${indent}<${node.tagName}${attrs}>\n`;
+    let result = `${indent}<${escapeXmlName(node.tagName)}${attrs}>\n`;
     for (const child of node.children) {
       result += serializeNode(child, indentLevel + 1);
     }
-    result += `${indent}</${node.tagName}>\n`;
+    result += `${indent}</${escapeXmlName(node.tagName)}>\n`;
     return result;
   }
 
   xml += serializeNode(rootNode, 0);
   return xml;
+}
+
+function escapeXmlName(unsafe: string): string {
+  return unsafe.replace(/[<>&'"]/g, (c) => {
+    switch (c) {
+      case '<':
+        return '_';
+      case '>':
+        return '_';
+      case '&':
+        return '_';
+      case "'":
+        return '_';
+      case '"':
+        return '_';
+      default:
+        return c;
+    }
+  });
 }
 
 function escapeXml(unsafe: string): string {

@@ -4,10 +4,14 @@ import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+FORBIDDEN_DEV_SECRETS = frozenset({"", "dev-only-change-me"})
+_JWKS_HOSTS = frozenset({"login.microsoftonline.com", "sts.windows.net", "login.microsoft.com"})
 
 
 def _flatten(raw: dict[str, Any]) -> dict[str, Any]:
@@ -51,8 +55,8 @@ def _flatten(raw: dict[str, Any]) -> dict[str, Any]:
         data["cors_origins"] = raw["cors_origins"]
     if raw.get("auth_dev_secret"):
         data["auth_dev_secret"] = raw["auth_dev_secret"]
-    if raw.get("data_dir"):
-        data["data_dir"] = raw["data_dir"]
+    if raw.get("auth_dev_role"):
+        data["auth_dev_role"] = raw["auth_dev_role"]
     if raw.get("profile"):
         data["app_profile"] = raw["profile"]
     for key in ("auth_test_token", "auth_test_email", "auth_test_name", "auth_test_role"):
@@ -72,8 +76,11 @@ class Settings(BaseSettings):
     app_name: str = "xml-s3-sync-manager"
     app_version: str = "1.0.0"
     app_profile: str = "default"
-    data_dir: str = "/data"
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8080"
+    cors_origins: str = (
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:8080,http://127.0.0.1:8080,"
+        "http://localhost:4173,http://127.0.0.1:4173"
+    )
     static_dir: str = ""
 
     s3_endpoint: str = "http://seaweedfs-s3:8333"
@@ -105,6 +112,7 @@ class Settings(BaseSettings):
     entra_viewer_roles: str = "Viewer"
 
     auth_dev_secret: str = Field(default="dev-only-change-me")
+    auth_dev_role: str = "Viewer"
     auth_dev_token_minutes: int = 480
     auth_test_token: str = Field(default="test-token")
     auth_test_email: str = "test@local"
@@ -113,6 +121,9 @@ class Settings(BaseSettings):
 
     def is_test_profile(self) -> bool:
         return self.app_profile.strip().lower() == "test"
+
+    def is_dev_profile(self) -> bool:
+        return self.app_profile.strip().lower() == "dev"
 
     def cors_origin_list(self) -> list[str]:
         return [part.strip() for part in self.cors_origins.split(",") if part.strip()]
@@ -123,7 +134,9 @@ class Settings(BaseSettings):
     def authority_url(self) -> str:
         if self.entra_authority.strip():
             return self.entra_authority.rstrip("/")
-        tenant = self.entra_tenant_id.strip() or "common"
+        tenant = self.entra_tenant_id.strip()
+        if not tenant:
+            raise ValueError("ENTRA_TENANT_ID is required when Entra ID is enabled.")
         return f"https://login.microsoftonline.com/{tenant}"
 
     def issuer_url(self) -> str:
@@ -133,8 +146,17 @@ class Settings(BaseSettings):
 
     def jwks_url(self) -> str:
         if self.entra_jwks_url.strip():
-            return self.entra_jwks_url
-        tenant = self.entra_tenant_id.strip() or "common"
+            parsed = urlparse(self.entra_jwks_url.strip())
+            host = (parsed.hostname or "").lower()
+            tenant = self.entra_tenant_id.strip()
+            if parsed.scheme != "https" or host not in _JWKS_HOSTS:
+                raise ValueError("ENTRA_JWKS_URL must be an https Microsoft identity URL.")
+            if tenant and tenant not in (parsed.path or ""):
+                raise ValueError("ENTRA_JWKS_URL does not match ENTRA_TENANT_ID.")
+            return self.entra_jwks_url.strip()
+        tenant = self.entra_tenant_id.strip()
+        if not tenant:
+            raise ValueError("ENTRA_TENANT_ID is required when Entra ID is enabled.")
         return f"https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys"
 
     def api_audience(self) -> str:
@@ -187,4 +209,23 @@ def get_settings() -> Settings:
     for key, value in defaults.items():
         env_key = key.upper()
         os.environ.setdefault(env_key, str(value) if not isinstance(value, bool) else str(value).lower())
-    return Settings()
+    settings = Settings()
+    assert_auth_runtime(settings)
+    return settings
+
+
+def assert_auth_runtime(settings: Settings) -> None:
+    if settings.entra_auth_enabled and not settings.is_test_profile():
+        if not settings.entra_tenant_id.strip() or not settings.api_audience():
+            raise RuntimeError("Entra ID requires ENTRA_TENANT_ID and an API audience (ENTRA_API_AUDIENCE or ENTRA_CLIENT_ID).")
+        settings.jwks_url()
+        return
+    if settings.is_dev_profile():
+        if settings.auth_dev_secret.strip() in FORBIDDEN_DEV_SECRETS:
+            raise RuntimeError("AUTH_DEV_SECRET must be set to a non-default value when APP_PROFILE=dev.")
+        return
+    if settings.is_test_profile():
+        return
+    raise RuntimeError(
+        "Refusing to start: set APP_PROFILE=dev (with AUTH_DEV_SECRET), APP_PROFILE=test, or enable Microsoft Entra ID."
+    )

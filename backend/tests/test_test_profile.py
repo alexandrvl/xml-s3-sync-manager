@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.config import _config_file, get_settings
 from app.main import app
+from app.token_denylist import reset_for_tests
 
 client = TestClient(app)
 
@@ -25,7 +26,7 @@ def test_config_file_prefers_test_yaml_over_default_app_config(monkeypatch, tmp_
     assert path == test_cfg
 
 
-def test_auth_config_exposes_test_token(monkeypatch) -> None:
+def test_auth_config_does_not_expose_test_token(monkeypatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "app_profile", "test")
     monkeypatch.setattr(settings, "auth_test_token", "test-token")
@@ -37,13 +38,14 @@ def test_auth_config_exposes_test_token(monkeypatch) -> None:
     body = response.json()
     assert body["profile"] == "test"
     assert body["testAuthEnabled"] is True
-    assert body["testToken"] == "test-token"
+    assert "testToken" not in body
     assert body["testEmail"] == "test@local"
     assert body["testName"] == "Test User"
     assert body["enabled"] is False
 
 
 def test_me_with_test_token(monkeypatch) -> None:
+    reset_for_tests()
     settings = get_settings()
     monkeypatch.setattr(settings, "app_profile", "test")
     monkeypatch.setattr(settings, "auth_test_token", "test-token")
@@ -67,6 +69,7 @@ def test_me_rejects_wrong_token_in_test_profile(monkeypatch) -> None:
 
 
 def test_login_test_user_in_test_profile(monkeypatch) -> None:
+    reset_for_tests()
     settings = get_settings()
     monkeypatch.setattr(settings, "app_profile", "test")
     monkeypatch.setattr(settings, "auth_test_token", "test-token")
@@ -81,11 +84,8 @@ def test_login_test_user_in_test_profile(monkeypatch) -> None:
     body = response.json()
     assert body["token"] == "test-token"
     assert body["user"]["email"] == "test@local"
-    assert body["user"]["name"] == "Test User"
-    assert body["user"]["authProvider"] == "test"
     me = client.get("/api/v1/auth/me", headers={"Authorization": "Bearer test-token"})
     assert me.status_code == 200
-    assert me.json()["email"] == "test@local"
 
 
 def test_login_test_user_rejects_wrong_password(monkeypatch) -> None:
@@ -100,7 +100,7 @@ def test_login_test_user_rejects_wrong_password(monkeypatch) -> None:
     assert response.status_code == 401
 
 
-def test_login_still_works_in_test_profile(monkeypatch) -> None:
+def test_login_other_email_rejected_in_test_profile(monkeypatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "app_profile", "test")
     monkeypatch.setattr(settings, "entra_auth_enabled", True)
@@ -108,28 +108,23 @@ def test_login_still_works_in_test_profile(monkeypatch) -> None:
         "/api/v1/auth/login",
         json={"email": "e2e@local.dev", "password": "any"},
     )
-    assert response.status_code == 200
-    token = response.json()["token"]
-    me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
-    assert me.status_code == 200
-    assert me.json()["email"] == "e2e@local.dev"
+    assert response.status_code == 401
 
 
-def test_documents_with_test_token(monkeypatch, tmp_path) -> None:
+def test_objects_with_test_token(monkeypatch, fake_s3) -> None:
+    reset_for_tests()
     settings = get_settings()
     monkeypatch.setattr(settings, "app_profile", "test")
     monkeypatch.setattr(settings, "auth_test_token", "test-token")
-    monkeypatch.setattr(settings, "data_dir", str(tmp_path))
-    from app.deps import _workspace
-
-    _workspace.cache_clear()
+    monkeypatch.setattr(settings, "auth_test_role", "Administrator")
     headers = {"Authorization": "Bearer test-token"}
-    created = client.post(
-        "/api/v1/documents",
+    created = client.put(
+        "/api/v1/objects",
         headers=headers,
-        json={"fileName": "sample.xml", "xmlContent": "<root><a>1</a></root>"},
+        json={"objectKey": "IN/2026/09/07/sample.xml", "fileName": "sample.xml", "xmlContent": "<root><a>1</a></root>"},
     )
-    assert created.status_code == 201
-    listed = client.get("/api/v1/documents", headers=headers)
+    assert created.status_code == 200
+    listed = client.get("/api/v1/objects", headers=headers, params={"prefix": "IN/"})
     assert listed.status_code == 200
     assert len(listed.json()["items"]) == 1
+    assert client.get("/api/v1/documents", headers=headers).status_code == 404

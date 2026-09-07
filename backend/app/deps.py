@@ -1,15 +1,29 @@
 from functools import lru_cache
+import logging
 
 from fastapi import Depends
 
 from app.config import Settings, get_settings
 from app.s3_store import S3Store
-from app.workspace import WorkspaceStore
+
+logger = logging.getLogger("uvicorn.error")
+
+_s3_last_error: str | None = None
 
 
-@lru_cache
-def _workspace(data_dir: str) -> WorkspaceStore:
-    return WorkspaceStore(data_dir)
+def s3_last_error() -> str | None:
+    return _s3_last_error
+
+
+def record_s3_ok() -> None:
+    global _s3_last_error
+    _s3_last_error = None
+
+
+def record_s3_error(message: str) -> None:
+    global _s3_last_error
+    _s3_last_error = message
+    logger.error("S3 unavailable: %s", message)
 
 
 @lru_cache
@@ -25,20 +39,11 @@ def _s3_store(
     client_key: str,
 ) -> S3Store:
     settings = get_settings()
-    store = S3Store(settings)
-    try:
-        store.ensure_bucket()
-    except Exception:
-        pass
-    return store
-
-
-def get_workspace(settings: Settings = Depends(get_settings)) -> WorkspaceStore:
-    return _workspace(settings.data_dir)
+    return S3Store(settings)
 
 
 def get_s3(settings: Settings = Depends(get_settings)) -> S3Store:
-    return _s3_store(
+    store = _s3_store(
         settings.s3_endpoint,
         settings.s3_access_key,
         settings.s3_secret_key,
@@ -49,3 +54,19 @@ def get_s3(settings: Settings = Depends(get_settings)) -> S3Store:
         settings.s3_client_cert,
         settings.s3_client_key,
     )
+    try:
+        store.ensure_bucket()
+        record_s3_ok()
+    except Exception as exc:
+        record_s3_error(str(exc))
+    return store
+
+
+def probe_s3(store: S3Store) -> bool:
+    try:
+        store.client.head_bucket(Bucket=store.bucket)
+        record_s3_ok()
+        return True
+    except Exception as exc:
+        record_s3_error(str(exc))
+        return False

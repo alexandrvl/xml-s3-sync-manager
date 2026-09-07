@@ -67,36 +67,52 @@ class S3Store:
     def ensure_bucket(self) -> None:
         try:
             self.client.head_bucket(Bucket=self.bucket)
-        except ClientError:
-            self.client.create_bucket(Bucket=self.bucket)
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if code in {"404", "NoSuchBucket", "NotFound"}:
+                self.client.create_bucket(Bucket=self.bucket)
+                return
+            raise
 
-    def put_xml(self, object_key: str, xml_content: str, file_name: str) -> dict:
+    def put_xml(self, object_key: str, xml_content: str, file_name: str, if_match: str | None = None) -> dict:
         body = xml_content.encode("utf-8")
-        response = self.client.put_object(
-            Bucket=self.bucket,
-            Key=object_key,
-            Body=body,
-            ContentType="application/xml",
-            Metadata={"filename": file_name},
-        )
+        kwargs: dict = {
+            "Bucket": self.bucket,
+            "Key": object_key,
+            "Body": body,
+            "ContentType": "application/xml",
+            "Metadata": {"filename": file_name},
+        }
+        if if_match:
+            kwargs["IfMatch"] = if_match
+        try:
+            response = self.client.put_object(**kwargs)
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if code in {"PreconditionFailed", "412"}:
+                raise http_error(409, "conflict", "Object was modified. Refresh and try again.") from exc
+            raise http_error(502, "storage_error", "Could not write the object to storage.") from exc
         last_modified = datetime.now(timezone.utc).isoformat()
         return {
             "etag": (response.get("ETag") or "").strip('"'),
             "version_id": response.get("VersionId"),
             "size_bytes": len(body),
             "last_modified": last_modified,
-            "storage_uri": f"s3://{self.bucket}/{object_key}",
+            "storage_uri": f"s3://{self.bucket}/{quote(object_key)}",
         }
 
     def get_xml(self, object_key: str) -> StoredObject:
         try:
             response = self.client.get_object(Bucket=self.bucket, Key=object_key)
         except ClientError as exc:
-            code = exc.response.get("Error", {}).get("Code", "")
+            code = str(exc.response.get("Error", {}).get("Code", ""))
             if code in {"NoSuchKey", "404", "NotFound"}:
                 raise http_error(404, "not_found", f"Object not found: {object_key}") from exc
-            raise
-        body = response["Body"].read().decode("utf-8")
+            raise http_error(502, "storage_error", "Could not read the object from storage.") from exc
+        try:
+            body = response["Body"].read().decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise http_error(400, "validation_error", "Object is not UTF-8 XML.") from exc
         last_modified = response.get("LastModified")
         modified = last_modified.astimezone(timezone.utc).isoformat() if last_modified else datetime.now(timezone.utc).isoformat()
         file_name = (response.get("Metadata") or {}).get("filename") or object_key.rsplit("/", 1)[-1]
@@ -113,38 +129,32 @@ class S3Store:
         )
 
     def list_objects(self, prefix: str | None, limit: int) -> list[StoredObjectSummary]:
-        items: list[StoredObjectSummary] = []
-        continuation: str | None = None
-        while True:
-            kwargs: dict = {"Bucket": self.bucket, "MaxKeys": 1000}
-            if prefix:
-                kwargs["Prefix"] = prefix
-            if continuation:
-                kwargs["ContinuationToken"] = continuation
+        kwargs: dict = {"Bucket": self.bucket, "MaxKeys": max(1, min(limit, 1000))}
+        if prefix:
+            kwargs["Prefix"] = prefix
+        try:
             response = self.client.list_objects_v2(**kwargs)
-            for obj in response.get("Contents") or []:
-                key = obj["Key"]
-                last_modified = obj.get("LastModified")
-                modified = (
-                    last_modified.astimezone(timezone.utc).isoformat()
-                    if last_modified
-                    else datetime.now(timezone.utc).isoformat()
+        except ClientError as exc:
+            raise http_error(502, "storage_error", "Could not list objects.") from exc
+        items: list[StoredObjectSummary] = []
+        for obj in response.get("Contents") or []:
+            key = obj["Key"]
+            last_modified = obj.get("LastModified")
+            modified = (
+                last_modified.astimezone(timezone.utc).isoformat()
+                if last_modified
+                else datetime.now(timezone.utc).isoformat()
+            )
+            etag = (obj.get("ETag") or "").strip('"')
+            items.append(
+                StoredObjectSummary(
+                    object_key=key,
+                    file_name=key.rsplit("/", 1)[-1],
+                    size_bytes=int(obj.get("Size") or 0),
+                    last_modified=modified,
+                    etag=etag or None,
+                    storage_uri=f"s3://{self.bucket}/{quote(key)}",
                 )
-                etag = (obj.get("ETag") or "").strip('"')
-                items.append(
-                    StoredObjectSummary(
-                        object_key=key,
-                        file_name=key.rsplit("/", 1)[-1],
-                        size_bytes=int(obj.get("Size") or 0),
-                        last_modified=modified,
-                        etag=etag or None,
-                        storage_uri=f"s3://{self.bucket}/{key}",
-                    )
-                )
-            if not response.get("IsTruncated"):
-                break
-            continuation = response.get("NextContinuationToken")
-            if not continuation or len(items) >= 5000:
-                break
+            )
         items.sort(key=lambda item: item.last_modified, reverse=True)
         return items[:limit]

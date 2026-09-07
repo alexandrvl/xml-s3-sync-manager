@@ -1,14 +1,16 @@
 openapi: 3.1.0
 info:
   title: XML S3 Sync Manager API
-  summary: REST API for XML documents, change history, and object storage
+  summary: REST API for auth and S3 object storage
   description: |
-    Browser clients call this API for every persistence and storage operation.
-    AWS credentials, bucket names, regions, encryption, and IAM policy stay on the
-    server. The client only sends logical object keys and XML payloads.
+    Browser clients call this API for auth and object storage.
+    Durable XML lives in S3. Editor drafts and change logs live in the browser.
+    There is no server-side scratch document store.
 
-    Implement this contract in the backend. The SPA uses `VITE_API_BASE_URL`
-    (`/api/v1` in production Docker; empty in local UI-only mode).
+    AWS credentials stay on the server. The client sends logical object keys and XML.
+
+    Logout revokes the current access token on this API process until the token expires.
+    Extra uvicorn workers do not share that denylist.
   version: 1.0.0
   license:
     name: UNLICENSED
@@ -22,8 +24,6 @@ servers:
 tags:
   - name: Health
   - name: Auth
-  - name: Documents
-  - name: Changes
   - name: Objects
 
 security:
@@ -43,6 +43,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+
+  /auth/config:
+    get:
+      tags: [Auth]
+      operationId: getAuthConfig
+      summary: Public Entra / profile flags for the SPA
+      security: []
+      responses:
+        '200':
+          description: Browser auth configuration (never includes the TEST bearer token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntraPublicConfig'
 
   /auth/login:
     post:
@@ -68,11 +82,35 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /auth/entra/token:
+    post:
+      tags: [Auth]
+      operationId: exchangeEntraCode
+      summary: Exchange an authorization code using the server redirect URI
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EntraCodeExchangeRequest'
+      responses:
+        '200':
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
   /auth/logout:
     post:
       tags: [Auth]
       operationId: logout
-      summary: Invalidate the current session
+      summary: Sign out and revoke this access token on this process until it expires
       responses:
         '204':
           description: Signed out
@@ -94,156 +132,6 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
-  /documents:
-    get:
-      tags: [Documents]
-      operationId: listDocuments
-      summary: List XML documents the caller can access
-      parameters:
-        - $ref: '#/components/parameters/Limit'
-        - name: q
-          in: query
-          schema:
-            type: string
-          description: Filter by file name
-      responses:
-        '200':
-          description: Document list
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/DocumentList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-    post:
-      tags: [Documents]
-      operationId: createDocument
-      summary: Create a document from uploaded XML
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateDocumentRequest'
-      responses:
-        '201':
-          description: Created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Document'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-
-  /documents/{documentId}:
-    parameters:
-      - $ref: '#/components/parameters/DocumentId'
-    get:
-      tags: [Documents]
-      operationId: getDocument
-      summary: Fetch a document including XML body
-      responses:
-        '200':
-          description: Document
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Document'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-    put:
-      tags: [Documents]
-      operationId: updateDocument
-      summary: Replace XML content of a document
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/UpdateDocumentRequest'
-      responses:
-        '200':
-          description: Updated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Document'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-    delete:
-      tags: [Documents]
-      operationId: deleteDocument
-      summary: Delete a document
-      responses:
-        '204':
-          description: Deleted
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-  /documents/{documentId}/changes:
-    parameters:
-      - $ref: '#/components/parameters/DocumentId'
-    get:
-      tags: [Changes]
-      operationId: listDocumentChanges
-      summary: Change log for a document
-      parameters:
-        - $ref: '#/components/parameters/Limit'
-      responses:
-        '200':
-          description: Change entries
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ChangeList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-    post:
-      tags: [Changes]
-      operationId: appendDocumentChange
-      summary: Record an editor change
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateChangeRequest'
-      responses:
-        '201':
-          description: Recorded
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ChangeEntry'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
   /objects:
     get:
       tags: [Objects]
@@ -254,7 +142,7 @@ paths:
           in: query
           schema:
             type: string
-          description: Logical key prefix
+          description: Logical key prefix under IN/ or OUT/
         - $ref: '#/components/parameters/Limit'
       responses:
         '200':
@@ -293,6 +181,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
 
   /objects/content:
     get:
@@ -306,7 +196,7 @@ paths:
           schema:
             type: string
             minLength: 1
-          description: Logical object key (may contain slashes)
+          description: Logical object key under IN/ or OUT/
       responses:
         '200':
           description: Object with XML body
@@ -321,23 +211,6 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
-  /sync-jobs:
-    get:
-      tags: [Objects]
-      operationId: listSyncJobs
-      summary: Recent push operations for the caller
-      parameters:
-        - $ref: '#/components/parameters/Limit'
-      responses:
-        '200':
-          description: Sync history
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SyncResultList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
 components:
   securitySchemes:
     bearerAuth:
@@ -346,12 +219,6 @@ components:
       bearerFormat: JWT
 
   parameters:
-    DocumentId:
-      name: documentId
-      in: path
-      required: true
-      schema:
-        type: string
     Limit:
       name: limit
       in: query
@@ -463,167 +330,50 @@ components:
         user:
           $ref: '#/components/schemas/User'
 
-    CreateDocumentRequest:
+    EntraPublicConfig:
       type: object
-      required: [fileName, xmlContent]
+      required: [enabled, tenantId, clientId, authority, redirectUri, postLogoutRedirectUri, scopes, apiAudience]
       properties:
-        fileName:
+        enabled:
+          type: boolean
+        tenantId:
           type: string
-          minLength: 1
-        xmlContent:
+        clientId:
           type: string
-          minLength: 1
-          description: Full XML document text
-
-    UpdateDocumentRequest:
-      type: object
-      required: [xmlContent]
-      properties:
-        xmlContent:
+        authority:
           type: string
-          minLength: 1
-        version:
-          type: integer
-          description: Optimistic concurrency token from last GET
-
-    Document:
-      type: object
-      required: [id, fileName, fileSize, lastModified, version, xmlContent, status]
-      properties:
-        id:
+        redirectUri:
           type: string
-        fileName:
+        postLogoutRedirectUri:
           type: string
-        fileSize:
-          type: integer
-          minimum: 0
-        lastModified:
-          type: string
-          format: date-time
-        version:
-          type: integer
-          minimum: 1
-        xmlContent:
-          type: string
-        status:
-          type: string
-          enum: [local, imported, synced]
-        objectKey:
-          type: string
-          description: Last known storage key after a successful push
-        etag:
-          type: string
-        rootTag:
-          type: string
-
-    DocumentSummary:
-      type: object
-      required: [id, fileName, fileSize, lastModified, version, status]
-      properties:
-        id:
-          type: string
-        fileName:
-          type: string
-        fileSize:
-          type: integer
-        lastModified:
-          type: string
-          format: date-time
-        version:
-          type: integer
-        status:
-          type: string
-          enum: [local, imported, synced]
-        objectKey:
-          type: string
-        rootTag:
-          type: string
-
-    DocumentList:
-      type: object
-      required: [items]
-      properties:
-        items:
+        scopes:
           type: array
           items:
-            $ref: '#/components/schemas/DocumentSummary'
+            type: string
+        apiAudience:
+          type: string
+        profile:
+          type: string
+        testAuthEnabled:
+          type: boolean
+        testEmail:
+          type: string
+          nullable: true
+        testName:
+          type: string
+          nullable: true
 
-    ChangeType:
-      type: string
-      enum:
-        - FIELD_UPDATE
-        - ATTRIBUTE_UPDATE
-        - NODE_ADDED
-        - NODE_DELETED
-        - S3_SYNC
-        - XML_UPLOADED
-        - REVERT
-
-    ChangeStatus:
-      type: string
-      enum: [pending, synced, failed, reverted]
-
-    CreateChangeRequest:
+    EntraCodeExchangeRequest:
       type: object
-      required: [changeType, nodePath, nodeTag, description]
+      required: [code]
       properties:
-        changeType:
-          $ref: '#/components/schemas/ChangeType'
-        nodePath:
+        code:
           type: string
-        nodeTag:
+        redirectUri:
           type: string
-        fieldName:
+          description: Ignored; the server uses ENTRA_REDIRECT_URI
+        codeVerifier:
           type: string
-        oldValue:
-          type: string
-        newValue:
-          type: string
-        description:
-          type: string
-
-    ChangeEntry:
-      type: object
-      required:
-        [id, timestamp, user, userEmail, nodePath, nodeTag, changeType, status, description]
-      properties:
-        id:
-          type: string
-        timestamp:
-          type: string
-          format: date-time
-        user:
-          type: string
-        userEmail:
-          type: string
-          format: email
-        nodePath:
-          type: string
-        nodeTag:
-          type: string
-        changeType:
-          $ref: '#/components/schemas/ChangeType'
-        fieldName:
-          type: string
-        oldValue:
-          type: string
-        newValue:
-          type: string
-        status:
-          $ref: '#/components/schemas/ChangeStatus'
-        syncId:
-          type: string
-        description:
-          type: string
-
-    ChangeList:
-      type: object
-      required: [items]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/ChangeEntry'
 
     PutObjectRequest:
       type: object
@@ -638,11 +388,14 @@ components:
             `..`. Example: IN/2026/09/07/file.xml. Paths outside IN/ are rejected.
         fileName:
           type: string
+          maxLength: 255
         xmlContent:
           type: string
-        documentId:
+          minLength: 1
+          maxLength: 5242880
+        ifMatch:
           type: string
-          description: Optional workspace document to mark as synced
+          description: Optional S3 ETag; mismatch returns 409
 
     StoredObject:
       type: object
@@ -716,12 +469,3 @@ components:
           type: integer
         storageUri:
           type: string
-
-    SyncResultList:
-      type: object
-      required: [items]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/SyncResult'

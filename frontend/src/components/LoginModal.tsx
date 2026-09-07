@@ -35,7 +35,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ open, onClose }) => {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [selectedRole, setSelectedRole] = useState<UserRole>('Administrator');
+  const [selectedRole, setSelectedRole] = useState<UserRole>('Viewer');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -111,7 +111,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ open, onClose }) => {
 
           <Typography variant="body2" color="text.secondary">
             {isTestProfile
-              ? `TEST profile is active. Sign in as ${testName} with ${testEmail} and password test-token, or use the button below. Entra ID is skipped.`
+              ? `TEST profile is active. Sign in as ${testName} with ${testEmail} and the TEST password (AUTH_TEST_TOKEN). Entra ID is skipped.`
               : isEntra
                 ? 'Sign in with Microsoft Entra ID. The API validates your access token and assigns a role from app roles.'
                 : isRemote
@@ -125,7 +125,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ open, onClose }) => {
             </Alert>
           )}
 
-          {isTestProfile && (
+          {isTestProfile && Boolean((import.meta.env.VITE_TEST_TOKEN || '').trim()) && (
             <Button
               variant="contained"
               color="primary"
@@ -191,8 +191,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({ open, onClose }) => {
               label="Password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder={isTestProfile ? 'test-token' : undefined}
-              helperText={isTestProfile ? `Test user: ${testEmail} / test-token` : undefined}
+              placeholder={isTestProfile ? 'TEST password' : undefined}
+              helperText={isTestProfile ? `Test user: ${testEmail}` : undefined}
               autoComplete="current-password"
               required={isRemote}
             />

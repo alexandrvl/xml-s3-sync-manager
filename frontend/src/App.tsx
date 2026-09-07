@@ -18,7 +18,7 @@ import { AuthProvider } from './context/AuthContext';
 import { XmlManagerProvider } from './context/XmlManagerContext';
 import { Header } from './components/Header';
 import { XmlUploader } from './components/XmlUploader';
-import { XmlDynamicEditor } from './components/XmlDynamicEditor';
+import { XmlDynamicEditor } from './components/xmlEditor/XmlDynamicEditor';
 import { HistoryTable } from './components/HistoryTable';
 import { S3SyncModal } from './components/S3SyncModal';
 import { LoginModal } from './components/LoginModal';

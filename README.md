@@ -1,6 +1,6 @@
 # XML S3 Sync Manager
 
-Browser XML editor with a FastAPI backend. The UI talks to the REST API defined in [`openapi.yaml`](openapi.yaml). Persistence, authentication, and object storage stay on the server; AWS/S3 credentials never appear in the browser.
+Browser XML editor with a FastAPI backend. The UI talks to the REST API defined in [`openapi.yaml`](openapi.yaml). Authentication and object storage stay on the server; AWS/S3 credentials never appear in the browser. XML in the bucket is the only durable store. Editor drafts and change logs live in the browser and do not survive a new session on another machine.
 
 In production the Python process serves both `/api/v1/...` and the built single-page app on the **same origin**. Local development can still run Vite and uvicorn as two processes.
 
@@ -14,11 +14,11 @@ In production the Python process serves both `/api/v1/...` and the built single-
 └──────────────────────────┬──────────────────────────────┘
                            │ boto3 (path-style S3)
                            ▼
-              SeaweedFS S3 gateway (:8333)
+              SeaweedFS S3 gateway (Compose network only)
 ```
 
-- **Frontend** (`frontend/`): React 19, Vite 6, MUI, Tailwind. `base` is `/` so assets load from the same origin.
-- **Backend** (`backend/`): FastAPI on Python 3.12. Serves JSON API plus the SPA when `index.html` is present.
+- **Frontend** (`frontend/`): React 19, Vite 6, MUI. `base` is `/` so assets load from the same origin.
+- **Backend** (`backend/`): FastAPI on Python 3.12. Serves JSON API plus the SPA when `index.html` is present. The API process is stateless: XML is stored only in S3.
 - **Object store** (Compose): SeaweedFS master, volume, filer, and S3 gateway. Compatible with the S3 API.
 
 Production requests use relative `/api/v1`, so the browser does not need a second origin or an nginx UI container.
@@ -79,6 +79,7 @@ Tests:
 
 ```bash
 cd backend
+pip install -r requirements.txt -r requirements-dev.txt
 pytest
 ```
 
@@ -92,22 +93,17 @@ source .venv/bin/activate
 APP_PROFILE=test uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
-From the frontend, set `VITE_API_BASE_URL=/api/v1` and start Vite. `GET /api/v1/auth/config` reports `profile: test`, `testToken`, and `testEmail`. On load the UI stores that token and calls `/auth/me`.
+From the frontend, set `VITE_API_BASE_URL=/api/v1` and start Vite. `GET /api/v1/auth/config` reports `profile: test`, `testEmail`, and `testName` (it does **not** return the bearer token). Sign in with the test email and `AUTH_TEST_TOKEN` as the password.
 
 **UI login (test user)**
 
 | Field | Value |
 | --- | --- |
 | Email | `test@local` |
-| Password | `test-token` |
+| Password | `AUTH_TEST_TOKEN` (default `test-token`) |
 | Role | Administrator (`Test User`) |
 
-Open the app (Vite: `http://localhost:3000`, Compose: `http://localhost:8080`) and use **Sign in**:
-
-- Click **Sign in as Test User (test@local)**, or
-- Enter `test@local` / `test-token` and click **Sign In**
-
-If the header already shows Test User, the session was applied automatically. Sign out first if you want to exercise the form. Override the password/token with `AUTH_TEST_TOKEN` (keep the UI and API in sync).
+Open the app and **Sign In** with that email and password. Optional `VITE_TEST_TOKEN` enables one-click / auto login for **Vite/Playwright only** (never bake it into the Docker UI).
 
 ```bash
 curl -s http://localhost:8080/api/v1/auth/config
@@ -117,10 +113,11 @@ curl -s http://localhost:8080/api/v1/auth/me \
 
 Do not enable `APP_PROFILE=test` in production.
 
-Docker (rebuild so the UI includes the test-user Sign in button):
+**Docker Compose demo** (TEST profile, Entra off). Form login on `http://localhost:8080` is `POST /api/v1/auth/login` — use `test@local` and `AUTH_TEST_TOKEN` (default `test-token`). `--build` is required after UI changes so the image serves the new JS.
 
 ```bash
-APP_PROFILE=test docker compose up --build
+cp .env.test.example .env.test
+docker compose -f docker-compose.yml -f docker-compose.test.yml --env-file .env.test up --build
 ```
 
 ### Frontend
@@ -142,7 +139,7 @@ Open `http://localhost:3000`.
 
 Other useful scripts: `npm run build`, `npm run preview` (port 4173), `npm run lint` (`tsc --noEmit`).
 
-CORS defaults allow `http://localhost:3000` and `http://localhost:8080`.
+CORS defaults allow `http://localhost:3000`, `http://localhost:8080`, and `http://localhost:4173` (Vite preview). Do not use `*`.
 
 ## Production Docker
 
@@ -163,9 +160,8 @@ docker compose up
 Then:
 
 - App (UI + API): `http://localhost:8080`
-- SeaweedFS S3: `http://localhost:8333`
-- SeaweedFS master: `http://localhost:9333`
-- SeaweedFS filer: `http://localhost:8888`
+
+SeaweedFS stays on the Compose network only (S3 is not published on the host).
 
 To rebuild the UI with a different baked API prefix:
 
@@ -187,7 +183,7 @@ Lookup order for the static directory: `STATIC_DIR` env / settings, `/app/static
 
 ## Environment variables
 
-See [`.env.example`](.env.example). Compose loads `.env` when present.
+See [`.env.example`](.env.example). Compose loads `.env` when present. For a TEST/demo stack, use [`.env.test.example`](.env.test.example) with [`docker-compose.test.yml`](docker-compose.test.yml) (see [TEST profile](#test-profile-local-e2e)).
 
 | Variable | Role |
 | --- | --- |
@@ -201,10 +197,10 @@ See [`.env.example`](.env.example). Compose loads `.env` when present.
 | `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`, `S3_REGION`, `S3_ADDRESSING_STYLE` | Object storage |
 | `S3_CA_BUNDLE` | PEM CA (or chain) for verifying HTTPS S3; empty = default CAs / HTTP unchanged |
 | `S3_CLIENT_CERT`, `S3_CLIENT_KEY` | Optional mTLS client certificate and key |
-| `DATA_DIR` | Backend data directory |
-| `APP_CONFIG_FILE` | YAML config (Compose mounts `backend/config.example.yaml`) |
-| `APP_PROFILE` | `test` loads `backend/config.test.yaml` and enables the static test token |
-| `AUTH_TEST_TOKEN` | Bearer token accepted only when `APP_PROFILE=test` (default `test-token`) |
+| `APP_CONFIG_FILE` | YAML config (default Compose mounts `backend/config.example.yaml`; TEST overlay uses `/app/config.test.yaml`) |
+| `APP_PROFILE` | `dev` (password login + non-default `AUTH_DEV_SECRET`), `test` (static test user), or Entra in production |
+| `AUTH_DEV_ROLE` | Role minted for `APP_PROFILE=dev` password login (default `Viewer`) |
+| `AUTH_TEST_TOKEN` | Bearer token accepted only when `APP_PROFILE=test` (not returned from `/auth/config`) |
 | `AUTH_DEV_SECRET` | Dev JWT secret when Entra is off |
 | `ENTRA_*` | Microsoft Entra ID (see [Microsoft Entra ID](#microsoft-entra-id)) |
 
@@ -342,7 +338,7 @@ If tokens fail validation, confirm the SPA requests the **API** scope (not only 
 
 ## Usage
 
-1. Sign in (`POST /api/v1/auth/login` when the remote API is enabled).
-2. Upload XML (`POST /api/v1/documents`).
-3. Edit in the table or raw source.
-4. Sync with an object key only (`PUT /api/v1/objects`).
+1. Sign in (`POST /api/v1/auth/login` when the remote API is enabled and `APP_PROFILE=dev` or `test`).
+2. Upload XML in the browser (drafts stay local until you sync).
+3. Edit in the table or raw source. Table edits commit on blur. The visual editor rewrites XML (comments and mixed content are not preserved).
+4. Sync with an inbound object key (`PUT /api/v1/objects`, `IN/...` only). Logout revokes the access token on this API process until it expires. Extra uvicorn workers do not share that denylist (no Redis).
