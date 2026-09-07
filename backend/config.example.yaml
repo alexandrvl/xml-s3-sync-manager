@@ -1,0 +1,32 @@
+# Copy to config.yaml or set APP_CONFIG_FILE. Environment variables override these values.
+
+s3:
+  endpoint: http://seaweedfs-s3:8333
+  access_key: seaweedfs-access-key
+  secret_key: seaweedfs-secret-key
+  bucket: xml-sync
+  region: us-east-1
+  addressing_style: path
+  # Enterprise PKI CA (PEM) used to verify HTTPS S3. Leave empty for HTTP / default CAs.
+  ca_bundle: ""
+  # Optional mTLS client cert (PEM). Set client_key if the private key is a separate file.
+  client_cert: ""
+  client_key: ""
+
+cors_origins: http://localhost:3000,http://127.0.0.1:3000,http://localhost:8080,http://127.0.0.1:8080
+
+entra:
+  enabled: false
+  tenant_id: ""
+  client_id: ""
+  client_secret: ""
+  authority: ""
+  redirect_uri: http://localhost:3000
+  post_logout_redirect_uri: http://localhost:3000
+  scopes: openid profile email
+  api_audience: ""
+  issuer: ""
+  jwks_url: ""
+  admin_roles: Administrator,Admin
+  editor_roles: "Content Editor,Editor"
+  viewer_roles: Viewer

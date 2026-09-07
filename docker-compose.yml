@@ -1,0 +1,180 @@
+name: xml-s3-sync-manager
+
+services:
+  seaweedfs-master:
+    image: chrislusf/seaweedfs:latest
+    command:
+      - master
+      - -ip=seaweedfs-master
+      - -ip.bind=0.0.0.0
+      - -port=9333
+      - -mdir=/data
+    volumes:
+      - seaweedfs_master:/data
+    ports:
+      - "9333:9333"
+    networks:
+      - xml-s3
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9333/cluster/status >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  seaweedfs-volume:
+    image: chrislusf/seaweedfs:latest
+    command:
+      - volume
+      - -master=seaweedfs-master:9333
+      - -ip=seaweedfs-volume
+      - -ip.bind=0.0.0.0
+      - -port=8080
+      - -dir=/data
+      - -max=0
+    volumes:
+      - seaweedfs_volume:/data
+    networks:
+      - xml-s3
+    restart: unless-stopped
+    depends_on:
+      seaweedfs-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/status >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  seaweedfs-filer:
+    image: chrislusf/seaweedfs:latest
+    command:
+      - filer
+      - -master=seaweedfs-master:9333
+      - -ip=seaweedfs-filer
+      - -ip.bind=0.0.0.0
+      - -port=8888
+    volumes:
+      - seaweedfs_filer:/data
+    ports:
+      - "8888:8888"
+    networks:
+      - xml-s3
+    restart: unless-stopped
+    depends_on:
+      seaweedfs-master:
+        condition: service_healthy
+      seaweedfs-volume:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8888/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  seaweedfs-s3:
+    image: chrislusf/seaweedfs:latest
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-seaweedfs-access-key}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-seaweedfs-secret-key}
+    command:
+      - s3
+      - -filer=seaweedfs-filer:8888
+      - -ip.bind=0.0.0.0
+      - -port=8333
+      - -config=/etc/seaweedfs/s3.json
+    volumes:
+      - ./docker/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    ports:
+      - "8333:8333"
+    networks:
+      - xml-s3
+    restart: unless-stopped
+    depends_on:
+      seaweedfs-filer:
+        condition: service_healthy
+    healthcheck:
+      # BusyBox wget (this image) exits 1 on HTTP 403; GNU wget uses 8. S3 has no
+      # anonymous ListBuckets, so a 403 from a live listener is healthy.
+      test: ["CMD-SHELL", "wget -q -S -O /dev/null http://127.0.0.1:8333/ 2>&1 | grep -qE 'HTTP/1\\.[01] (200|403|404)'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${DOCKER_VITE_API_BASE_URL:-/api/v1}
+        VITE_OBJECT_KEY: ${VITE_OBJECT_KEY:-}
+        VITE_ENTRA_ENABLED: ${VITE_ENTRA_ENABLED:-false}
+        VITE_ENTRA_TENANT_ID: ${VITE_ENTRA_TENANT_ID:-}
+        VITE_ENTRA_CLIENT_ID: ${VITE_ENTRA_CLIENT_ID:-}
+        VITE_ENTRA_AUTHORITY: ${VITE_ENTRA_AUTHORITY:-}
+        VITE_ENTRA_REDIRECT_URI: ${VITE_ENTRA_REDIRECT_URI:-http://localhost:8080}
+        VITE_ENTRA_SCOPES: ${VITE_ENTRA_SCOPES:-}
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: "8080"
+      STATIC_DIR: /app/static
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://localhost:8080,http://127.0.0.1:8080}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://seaweedfs-s3:8333}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-seaweedfs-access-key}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-seaweedfs-secret-key}
+      S3_BUCKET: ${S3_BUCKET:-xml-sync}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ADDRESSING_STYLE: ${S3_ADDRESSING_STYLE:-path}
+      S3_CA_BUNDLE: ${S3_CA_BUNDLE:-}
+      S3_CLIENT_CERT: ${S3_CLIENT_CERT:-}
+      S3_CLIENT_KEY: ${S3_CLIENT_KEY:-}
+      ENTRA_AUTH_ENABLED: ${ENTRA_AUTH_ENABLED:-false}
+      ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
+      ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID:-}
+      ENTRA_CLIENT_SECRET: ${ENTRA_CLIENT_SECRET:-}
+      ENTRA_AUTHORITY: ${ENTRA_AUTHORITY:-}
+      ENTRA_REDIRECT_URI: ${ENTRA_REDIRECT_URI:-http://localhost:8080}
+      ENTRA_SCOPES: ${ENTRA_SCOPES:-openid profile email}
+      ENTRA_API_AUDIENCE: ${ENTRA_API_AUDIENCE:-}
+      ENTRA_ISSUER: ${ENTRA_ISSUER:-}
+      ENTRA_JWKS_URL: ${ENTRA_JWKS_URL:-}
+      AUTH_DEV_SECRET: ${AUTH_DEV_SECRET:-dev-only-change-me}
+      DATA_DIR: /data
+      APP_PROFILE: ${APP_PROFILE:-default}
+      AUTH_TEST_TOKEN: ${AUTH_TEST_TOKEN:-test-token}
+      APP_CONFIG_FILE: ${APP_CONFIG_FILE:-/app/config.yaml}
+    volumes:
+      - backend_data:/data
+      - ./backend/config.example.yaml:/app/config.yaml:ro
+      - ./backend/config.test.yaml:/app/config.test.yaml:ro
+    ports:
+      - "8080:8080"
+    networks:
+      - xml-s3
+    restart: unless-stopped
+    depends_on:
+      seaweedfs-s3:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+
+networks:
+  xml-s3:
+    driver: bridge
+
+volumes:
+  seaweedfs_master:
+  seaweedfs_volume:
+  seaweedfs_filer:
+  backend_data:

@@ -1,0 +1,65 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+backend/config.yaml
+
+# Node / Vite
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python / FastAPI
+.venv/
+venv/
+env/
+backend/.venv/
+backend/static/
+backend/tmp-test-data/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+
+# Test and local data
+coverage/
+.tox/
+.nox/
+data/
+*.sqlite
+*.db
+
+# Logs and OS
+*.log
+.DS_Store
+Thumbs.db
+
+# IDEs
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.cursor/
+*.swp
+*~
+
+# Docker / local overrides
+docker-compose.override.yml
+
+# Local PKI / TLS material (never commit)
+certs/

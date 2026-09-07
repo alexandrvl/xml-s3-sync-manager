@@ -1,0 +1,32 @@
+# TEST profile — local e2e only. Activate with APP_PROFILE=test
+# (or APP_CONFIG_FILE pointing at this file). Never use in production.
+#
+# Auth: send  Authorization: Bearer test-token
+# UI: email test@local, password test-token (or Sign in as Test User).
+
+profile: test
+
+s3:
+  endpoint: http://127.0.0.1:8333
+  access_key: seaweedfs-access-key
+  secret_key: seaweedfs-secret-key
+  bucket: xml-sync
+  region: us-east-1
+  addressing_style: path
+  # Leave empty: SeaweedFS is HTTP. Set ca_bundle when pointing at HTTPS + enterprise PKI.
+  ca_bundle: ""
+  client_cert: ""
+  client_key: ""
+
+cors_origins: http://localhost:3000,http://127.0.0.1:3000,http://localhost:8080,http://127.0.0.1:8080,http://localhost:4173,http://127.0.0.1:4173
+
+entra:
+  enabled: false
+
+auth_test_token: test-token
+auth_test_email: test@local
+auth_test_name: Test User
+auth_test_role: Administrator
+
+data_dir: ./tmp-test-data
+auth_dev_secret: test-profile-dev-secret

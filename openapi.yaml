@@ -1,0 +1,727 @@
+openapi: 3.1.0
+info:
+  title: XML S3 Sync Manager API
+  summary: REST API for XML documents, change history, and object storage
+  description: |
+    Browser clients call this API for every persistence and storage operation.
+    AWS credentials, bucket names, regions, encryption, and IAM policy stay on the
+    server. The client only sends logical object keys and XML payloads.
+
+    Implement this contract in the backend. The SPA uses `VITE_API_BASE_URL`
+    (`/api/v1` in production Docker; empty in local UI-only mode).
+  version: 1.0.0
+  license:
+    name: UNLICENSED
+
+servers:
+  - url: /api/v1
+    description: Same-origin (Vite proxy or reverse proxy)
+  - url: http://localhost:8080/api/v1
+    description: Local backend
+
+tags:
+  - name: Health
+  - name: Auth
+  - name: Documents
+  - name: Changes
+  - name: Objects
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Liveness and readiness
+      security: []
+      responses:
+        '200':
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Create a session
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Invalidate the current session
+      responses:
+        '204':
+          description: Signed out
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      operationId: getCurrentUser
+      summary: Current authenticated user
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /documents:
+    get:
+      tags: [Documents]
+      operationId: listDocuments
+      summary: List XML documents the caller can access
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: Filter by file name
+      responses:
+        '200':
+          description: Document list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Documents]
+      operationId: createDocument
+      summary: Create a document from uploaded XML
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDocumentRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /documents/{documentId}:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+    get:
+      tags: [Documents]
+      operationId: getDocument
+      summary: Fetch a document including XML body
+      responses:
+        '200':
+          description: Document
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Documents]
+      operationId: updateDocument
+      summary: Replace XML content of a document
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDocumentRequest'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [Documents]
+      operationId: deleteDocument
+      summary: Delete a document
+      responses:
+        '204':
+          description: Deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /documents/{documentId}/changes:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+    get:
+      tags: [Changes]
+      operationId: listDocumentChanges
+      summary: Change log for a document
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Change entries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangeList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [Changes]
+      operationId: appendDocumentChange
+      summary: Record an editor change
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateChangeRequest'
+      responses:
+        '201':
+          description: Recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangeEntry'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /objects:
+    get:
+      tags: [Objects]
+      operationId: listObjects
+      summary: List stored XML objects (backend maps to S3)
+      parameters:
+        - name: prefix
+          in: query
+          schema:
+            type: string
+          description: Logical key prefix
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Object listing (metadata only)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoredObjectList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    put:
+      tags: [Objects]
+      operationId: putObject
+      summary: Push XML to storage
+      description: |
+        Backend writes to S3 using server-side credentials. The request must not
+        include AWS keys, KMS key IDs, bucket names, or encryption settings.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutObjectRequest'
+      responses:
+        '200':
+          description: Stored or overwritten
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /objects/content:
+    get:
+      tags: [Objects]
+      operationId: getObject
+      summary: Pull XML content by logical key
+      parameters:
+        - name: key
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+          description: Logical object key (may contain slashes)
+      responses:
+        '200':
+          description: Object with XML body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoredObject'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /sync-jobs:
+    get:
+      tags: [Objects]
+      operationId: listSyncJobs
+      summary: Recent push operations for the caller
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Sync history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncResultList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    DocumentId:
+      name: documentId
+      in: path
+      required: true
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      description: >
+        Maximum number of items to return. Object listings are sorted by last
+        modified descending, so this is the N most recently updated XML files.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing or invalid bearer token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Authenticated but not allowed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: Version conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          examples: [validation_error, unauthorized, forbidden, not_found]
+        message:
+          type: string
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        version:
+          type: string
+
+    UserRole:
+      type: string
+      enum: [Administrator, Content Editor, Viewer]
+
+    User:
+      type: object
+      required: [id, name, email, role]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/UserRole'
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          minLength: 1
+
+    SessionResponse:
+      type: object
+      required: [token, tokenType, user]
+      properties:
+        token:
+          type: string
+          description: JWT or opaque session token
+        tokenType:
+          type: string
+          enum: [Bearer]
+        expiresInSeconds:
+          type: integer
+          minimum: 1
+        user:
+          $ref: '#/components/schemas/User'
+
+    CreateDocumentRequest:
+      type: object
+      required: [fileName, xmlContent]
+      properties:
+        fileName:
+          type: string
+          minLength: 1
+        xmlContent:
+          type: string
+          minLength: 1
+          description: Full XML document text
+
+    UpdateDocumentRequest:
+      type: object
+      required: [xmlContent]
+      properties:
+        xmlContent:
+          type: string
+          minLength: 1
+        version:
+          type: integer
+          description: Optimistic concurrency token from last GET
+
+    Document:
+      type: object
+      required: [id, fileName, fileSize, lastModified, version, xmlContent, status]
+      properties:
+        id:
+          type: string
+        fileName:
+          type: string
+        fileSize:
+          type: integer
+          minimum: 0
+        lastModified:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+        xmlContent:
+          type: string
+        status:
+          type: string
+          enum: [local, imported, synced]
+        objectKey:
+          type: string
+          description: Last known storage key after a successful push
+        etag:
+          type: string
+        rootTag:
+          type: string
+
+    DocumentSummary:
+      type: object
+      required: [id, fileName, fileSize, lastModified, version, status]
+      properties:
+        id:
+          type: string
+        fileName:
+          type: string
+        fileSize:
+          type: integer
+        lastModified:
+          type: string
+          format: date-time
+        version:
+          type: integer
+        status:
+          type: string
+          enum: [local, imported, synced]
+        objectKey:
+          type: string
+        rootTag:
+          type: string
+
+    DocumentList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentSummary'
+
+    ChangeType:
+      type: string
+      enum:
+        - FIELD_UPDATE
+        - ATTRIBUTE_UPDATE
+        - NODE_ADDED
+        - NODE_DELETED
+        - S3_SYNC
+        - XML_UPLOADED
+        - REVERT
+
+    ChangeStatus:
+      type: string
+      enum: [pending, synced, failed, reverted]
+
+    CreateChangeRequest:
+      type: object
+      required: [changeType, nodePath, nodeTag, description]
+      properties:
+        changeType:
+          $ref: '#/components/schemas/ChangeType'
+        nodePath:
+          type: string
+        nodeTag:
+          type: string
+        fieldName:
+          type: string
+        oldValue:
+          type: string
+        newValue:
+          type: string
+        description:
+          type: string
+
+    ChangeEntry:
+      type: object
+      required:
+        [id, timestamp, user, userEmail, nodePath, nodeTag, changeType, status, description]
+      properties:
+        id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        user:
+          type: string
+        userEmail:
+          type: string
+          format: email
+        nodePath:
+          type: string
+        nodeTag:
+          type: string
+        changeType:
+          $ref: '#/components/schemas/ChangeType'
+        fieldName:
+          type: string
+        oldValue:
+          type: string
+        newValue:
+          type: string
+        status:
+          $ref: '#/components/schemas/ChangeStatus'
+        syncId:
+          type: string
+        description:
+          type: string
+
+    ChangeList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChangeEntry'
+
+    PutObjectRequest:
+      type: object
+      required: [objectKey, xmlContent, fileName]
+      additionalProperties: false
+      properties:
+        objectKey:
+          type: string
+          minLength: 1
+          description: >
+            Logical destination path under IN/. Must not start with / or contain
+            `..`. Example: IN/2026/09/07/file.xml. Paths outside IN/ are rejected.
+        fileName:
+          type: string
+        xmlContent:
+          type: string
+        documentId:
+          type: string
+          description: Optional workspace document to mark as synced
+
+    StoredObject:
+      type: object
+      required: [objectKey, fileName, sizeBytes, lastModified, xmlContent]
+      properties:
+        objectKey:
+          type: string
+        fileName:
+          type: string
+        sizeBytes:
+          type: integer
+          minimum: 0
+        lastModified:
+          type: string
+          format: date-time
+        etag:
+          type: string
+        versionId:
+          type: string
+        storageUri:
+          type: string
+          description: Opaque URI returned by the backend (for example an s3:// URI)
+        xmlContent:
+          type: string
+
+    StoredObjectSummary:
+      type: object
+      required: [objectKey, fileName, sizeBytes, lastModified]
+      properties:
+        objectKey:
+          type: string
+        fileName:
+          type: string
+        sizeBytes:
+          type: integer
+        lastModified:
+          type: string
+          format: date-time
+        etag:
+          type: string
+        versionId:
+          type: string
+        storageUri:
+          type: string
+
+    StoredObjectList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/StoredObjectSummary'
+
+    SyncResult:
+      type: object
+      required: [syncId, timestamp, objectKey, sizeBytes]
+      properties:
+        syncId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        objectKey:
+          type: string
+        etag:
+          type: string
+        versionId:
+          type: string
+        sizeBytes:
+          type: integer
+        storageUri:
+          type: string
+
+    SyncResultList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncResult'
